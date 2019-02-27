@@ -1,4 +1,4 @@
-import panda as pd
+import pandas as pd
 import numpy as np
 
 # 变量woe结果表

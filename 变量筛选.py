@@ -1,6 +1,7 @@
 
 import pandas as pd
-from sklearn.ensemble import XGBClassifier,RandomForestClassifier,
+from xgboost import XGBClassifier
+from sklearn.ensemble import RandomForestClassifier
 import matplotlib.pyplot as plt
 import seaborn as sns
 import statsmodels.api as sm

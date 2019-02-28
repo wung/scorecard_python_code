@@ -10,6 +10,17 @@ from sklearn.linear_model import LogisticRegression
 plt.rcParams['font.sans-serif'] =['SimHei']  #用来正常显示中文标签
 plt.rcParams['axes.unicode_minus'] =False   #用来正常显示负号
 
+
+# 按照Iv 值进行筛选
+def select_iv(iv_df,ori_iv,thresold):
+    """
+    iv_df：已经分箱好的数据
+    thresold:iv的比例
+    """
+    iv_df_1 = iv_df.copy()
+    iv_df_1 = iv_df_1.loc[iv_df_1[ori_iv]>=thresold]
+    return iv_df_1
+
 # xgboost筛选变量 
 def select_xgboost(df,target,imp_num=None):
     """
@@ -52,6 +63,12 @@ def select_rf(df,target,imp_num=None):
     rf_fea_imp = rf_fea_imp.sort_values('imp',ascending=False).reset_index(drop=True).iloc[:imp_num,:]
     rf_select_col = list(rf_fea_imp.col)
     return rf_fea_imp,rf_select_col
+
+
+
+
+
+
 
 
 # 相关性可视化

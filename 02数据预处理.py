@@ -159,6 +159,7 @@ def const_delete(df,col_list,threshold=None):
     """
     df2 = df.copy()
     const_col = []
+
     for col in col_list:
         const_pct = df2[col].value_counts().iloc[0]/df2[df2[col].notnull()].shape[0]
         if const_pct>=threshold:

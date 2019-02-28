@@ -213,7 +213,7 @@ def xgb_model_fit(params, dtrain, max_round=300, cv_folds=5, n_stop_round=50):
     return n_round, mean_auc
 
 
-def xgb_grid_search_cv(params=None, key=None, search_params=None, dtrain=None, max_round=300, cv_folds=5,n_stop_round=50, return_best_model=True, verbose=True):
+def xgb_grid_search_cv( key, search_params,params=None,, dtrain=None, max_round=300, cv_folds=5,n_stop_round=50, return_best_model=True, verbose=True):
     """自定义 grid_search_cv for xgboost 函数。
     Args: 
         params: dict, xgb 模型参数。

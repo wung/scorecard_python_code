@@ -11,7 +11,7 @@ import time
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split,cross_val_score,KFold, StratifiedKFold
 from sklearn.pipeline import Pipeline
-from sklearn.grid_search import GridSearchCV
+from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import RandomizedLogisticRegression,RandomizedLasso,SGDClassifier,LogisticRegression
 from sklearn.feature_selection import RFECV
 from sklearn.ensemble import ExtraTreesClassifier,RandomForestClassifier
@@ -20,6 +20,8 @@ import xgboost as xgb
 from bayes_opt import BayesianOptimization
 from attrdict import AttrDict
 import lightgbm as lgb
+
+from sklearn.externals import joblib
 
 
 
@@ -70,8 +72,7 @@ def pick_variables(x,y,descover=True,method="rlr",threshold=0.25,sls=0.05):#默�
                 break
         x=x[var_list]
     #向前选择    
-    if method =="fs":
-        
+    if method =="fs":   
         data = pd.concat([x, y], axis=1)
         response=y.name
         remaining = set(x.columns)
@@ -89,8 +90,7 @@ def pick_variables(x,y,descover=True,method="rlr",threshold=0.25,sls=0.05):#默�
             if current_score < best_new_score:
                 remaining.remove(best_candidate)
                 selected.append(best_candidate)
-                current_score = best_new_score
-                
+                current_score = best_new_score               
         print(len(selected))
         x=x[selected]
 
@@ -176,8 +176,7 @@ def model_optimizing(x,y,model="LR"):
               #核函数，将数据映射到高维空间中，寻找可区分数据的高维空间的超平面
               #'svm__C':(2.5,1),'svm__kernel':('linear','poly','rbf'),
           }
-
-    
+   
     grid_search = GridSearchCV(pipline,parameters,n_jobs=6,scoring='recall',cv=5)
     grid_search.fit(x, y) 
     print('Best score: %0.3f' % grid_search.best_score_)
@@ -308,8 +307,7 @@ def xgb_eval(max_depth,min_child_weight,reg_alpha,gamma,subsample,colsample_bytr
           'eval_metric': 'auc',
           'njob':8
           }
-    cv_result = xgb.cv(params,dtrain, 300, nfold=5,
-        metrics='auc', early_stopping_rounds=50, show_stdv=False)
+    cv_result = xgb.cv(params,dtrain, 300, nfold=5,metrics='auc',early_stopping_rounds=50,show_stdv=False)
     n_round = cv_result.shape[0]  # 最优模型，最优迭代次数
     mean_auc = cv_result['test-auc-mean'].values[-1]  # 最好的  AUC
     return  mean_auc

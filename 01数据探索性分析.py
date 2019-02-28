@@ -3,8 +3,8 @@ import  pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-plt.rcParams['font.sans-serif'] =['SimHei']  #用来正常显示中文标签
-plt.rcParams['axes.unicode_minus'] =False   #用来正常显示负号
+#plt.rcParams['font.sans-serif'] =['SimHei']  #用来正常显示中文标签
+#plt.rcParams['axes.unicode_minus'] =False   #用来正常显示负号
 
 # 类别型变量的分布
 def plot_cate_var(df,col_list,hspace=0.4,wspace=0.4,plt_size=None,plt_num=None,x=None,y=None):

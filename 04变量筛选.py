@@ -1,4 +1,5 @@
 
+import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -6,7 +7,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import statsmodels.api as sm
 from sklearn.linear_model import LogisticRegression
-
+import statsmodels.formula.api as smf
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectFromModel
+from sklearn.linear_model import LogisticRegression  as LR
 plt.rcParams['font.sans-serif'] =['SimHei']  #用来正常显示中文标签
 plt.rcParams['axes.unicode_minus'] =False   #用来正常显示负号
 
@@ -63,11 +67,6 @@ def select_rf(df,target,imp_num=None):
     rf_fea_imp = rf_fea_imp.sort_values('imp',ascending=False).reset_index(drop=True).iloc[:imp_num,:]
     rf_select_col = list(rf_fea_imp.col)
     return rf_fea_imp,rf_select_col
-
-
-
-
-
 
 
 
@@ -191,3 +190,504 @@ def forward_delete_coef(x_train,y_train):
     lr_coe = pd.DataFrame({'col':coef_col,
                            'coef':lr.coef_[0]})
     return coef_col,lr_coe
+
+
+# 基于L1 正则化筛选变量
+
+def SelectData_l1(df,y):
+  """
+  基于L1正则化选取特征
+  """
+  x = df.drop(y,axis=1)
+  y = df[y]
+  lr = LR(penalty="l1",dual=False).fit(x,y)
+  model = SelectFromModel(lr,prefit=True)
+  var = []
+  for i,j in enumerate(list(model.get_support())):
+      if j == True:
+          var.append(x.iloc[:,i].name)
+  return var
+
+"""逐步回归算法来筛选变量
+这里包括向前或者向后来筛选变量
+向前选择法考虑的调整的r方
+"""
+def SelectData_stepwise(df,target,intercept=True,normalize=False,criterion='bic',p_value_enter=0.05,
+                        f_pvalue_enter =0.05,direction='backward',show_step=True,
+                        criterion_enter = None,criterion_remove =None,max_iter =200,**kw):
+    """逐步回归
+    df: 数据集 response 为第一列
+    response:str 回归相关的变量
+    intercept:bool 模型是否存在截距
+    criterion: str 默认是bic 逐步回归优化规则
+    f_pavlue_enter: str 当选择criterion=’ssr‘时，模型加入或移除变量的f_pvalue阈值
+    p_values_enter:float,默认是0.05 当选择criterion="both"时移除变量的pvalue的阈值
+    direction：str  默认是backward
+    show_step: 是否显示逐步回归的过程
+    critertion_enter: 当选择的direction='both‘或’forward‘ 模型加入变量相应的critertion的阈值
+    critertion_remove：当选择direction=backward时 模型移除变量的相应的criterion阈值
+    max_iter:模型最大迭代次数  
+    """
+    critertion_list = ['bic','aic','ssr','rsquared','rsquared_adj']
+    if criterion not in critertion_list:
+        raise IOError('请输入正确的critertion，必须是以下内容之一:','\n',critertion_list)
+    direction_list = ['backward','forward','both']
+    
+    if direction not in direction_list:
+        raise IOError('请输入正确的direction,必须是以下内容之一:','\n',direction_list)
+    
+    # 默认p_enter 参数
+    p_enter = {'bic':0.0,'aic':0.0,'ssr':0.05,'rsquared':0.05,'rsquared_adj':-0.05}
+    
+    if criterion_enter:
+       p_enter[criterion] = criterion_enter
+       
+    # 默认的p_remove 参数
+    p_remove = {'bic':0.01,'aic':0.01,'ssr':0.1,'rsquared':0.05,'rsquared_adj':-0.05}
+    
+    if criterion_remove:
+        p_remove[criterion] = criterion_remove
+    
+    if normalize: #如果需要标准化数据
+        intercept = False
+        df_std = StandardScaler().fit_transform(df)
+        df = pd.DataFrame(df_std,columns=df.columns,index=df.index)
+        
+    '''forward'''
+    if direction == 'forward':
+        remaining =  list(df.columns) #自变量集合
+        remaining.remove(target)
+        selected= [] #初始化选入模型的变量列表
+        if intercept: #判断是否有截距
+            formula  = "{}~{}+1".format(target,remaining[0])
+        else:
+            formula = "{}~{}-1".format(target,remaiing[0])
+        result = smf.ols(formula,df).fit() #最小二乘法回归模型拟合
+        current_score = eval('result.'+criterion)
+        best_new_score = eval('result.'+criterion)
+        if show_step:
+            print('\nstepwise staring:\n')
+        iter_times = 0
+        #当变量未删除完，并且当前评分更新时进行循环
+        while remaining and (current_score == best_new_score) and (iter_times < max_iter):
+            scores_with_candidates = [] # 初始化变量以及评分列表
+            for candidate in remaining: #在未删除的变量中每次选择一个变量进入模型，以此循环
+                if intercept:
+                    formula = "{}~{}+1".format(target,"+".join(selected+[candidate]))
+                else:
+                    formula = "{}~{}-1".format(target,"+".join(selected+[candidate]))
+            result = smf.ols(formula,df).fit() #最小二乘法拟合
+            fvalue = result.fvalue
+            f_pvalue =result.f_pvalue
+            score = eval('result.'+criterion)
+            scores_with_candidates.append((score,candidate,fvalue,f_pvalue)) # 记录此次循环的变量、评分列表
+        
+            if criterion =='ssr': # 这几个指标取最小值进行优化
+                scores_with_candidates.sort(reverse=True)
+                best_new_score,best_candidate,best_new_fvalue,best_new_f_pvalue = scores_with_candidates.pop()
+                if ((current_score - best_new_score) > p_enter[criterion]) and (
+                        best_new_f_pvalue < f_pvalue_enter):  # 如果当前评分大于最新评分
+                    remaining.remove(best_candidate)  # 从剩余未评分变量中剔除最新最优分对应的变量
+                    selected.append(best_candidate)  # 将最新最优分对应的变量放入已选变量列表
+                    current_score = best_new_score  # 更新当前评分
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, SSR = %.3f, Fstat = %.3f, FpValue = %.3e' %
+                              (best_candidate, best_new_score, best_new_fvalue, best_new_f_pvalue))
+
+                    elif (current_score - best_new_score) >= 0 and (
+                            best_new_f_pvalue < f_pvalue_enter) and iter_times == 0:  # 当评分差大于等于0，且为第一次迭代
+                        remaining.remove(best_candidate)
+                        selected.append(best_candidate)
+                        current_score = best_new_score
+                        if show_step:  # 是否显示逐步回归过程
+                            print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                    elif (best_new_f_pvalue < f_pvalue_enter) and iter_times == 0:  # 当评分差小于p_enter，且为第一次迭代
+                        selected.append(remaining[0])
+                        remaining.remove(remaining[0])
+                        if show_step:  # 是否显示逐步回归过程
+                            print('Adding %s, %s = %.3f' % (remaining[0], criterion, best_new_score))
+            elif criterion in ['bic', 'aic']:  # 这几个指标取最小值进行优化
+                scores_with_candidates.sort(reverse=True)  # 对评分列表进行降序排序
+                best_new_score, best_candidate, best_new_fvalue, best_new_f_pvalue = scores_with_candidates.pop()  # 提取最小分数及其对应变量
+                if (current_score - best_new_score) > p_enter[criterion]:  # 如果当前评分大于最新评分
+                    remaining.remove(best_candidate)  # 从剩余未评分变量中剔除最新最优分对应的变量
+                    selected.append(best_candidate)  # 将最新最优分对应的变量放入已选变量列表
+                    current_score = best_new_score  # 更新当前评分
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif (current_score - best_new_score) >= 0 and iter_times == 0:  # 当评分差大于等于0，且为第一次迭代
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif iter_times == 0:  # 当评分差小于p_enter，且为第一次迭代
+                    selected.append(remaining[0])
+                    remaining.remove(remaining[0])
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (remaining[0], criterion, best_new_score))
+            else:
+                scores_with_candidates.sort()
+                best_new_score, best_candidate, best_new_fvalue, best_new_f_pvalue = scores_with_candidates.pop()
+                if (best_new_score - current_score) > p_enter[criterion]:  # 当评分差大于p_enter
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif (best_new_score - current_score) >= 0 and iter_times == 0:  # 当评分差大于等于0，且为第一次迭代
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif iter_times == 0:  # 当评分差小于p_enter，且为第一次迭代
+                    selected.append(remaining[0])
+                    remaining.remove(remaining[0])
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (remaining[0], criterion, best_new_score))
+
+            if intercept:  # 是否有截距
+                formula = "{} ~ {} + 1".format(target, ' + '.join(selected))
+            else:
+                formula = "{} ~ {} - 1".format(target, ' + '.join(selected))
+
+            stepwise_model = smf.ols(formula, df).fit()  # 最优模型拟合
+
+            if show_step:  # 是否显示逐步回归过程
+                print('\nLinear regression model:', '\n  ', stepwise_model.model.formula)
+                print('\n', stepwise_model.summary())
+
+    ''' backward '''
+    if direction == 'backward':
+        remaining, selected = set(df.columns), set(df.columns)  # 自变量集合
+        remaining.remove(target)
+        selected.remove(target)  # 初始化选入模型的变量列表
+        # 初始化当前评分,最优新评分
+        if intercept:  # 是否有截距
+            formula = "{} ~ {} + 1".format(target, ' + '.join(selected))
+        else:
+            formula = "{} ~ {} - 1".format(target, ' + '.join(selected))
+
+        result = smf.ols(formula, df).fit()  # 最小二乘法回归模型拟合
+        current_score = eval('result.' + criterion)
+        worst_new_score = eval('result.' + criterion)
+
+        if show_step:
+            print('\nstepwise starting:\n')
+        iter_times = 0
+        # 当变量未剔除完，并且当前评分更新时进行循环
+        while remaining and (current_score == worst_new_score) and (iter_times < max_iter):
+            scores_with_eliminations = []  # 初始化变量以及其评分列表
+            for elimination in remaining:  # 在未剔除的变量中每次选择一个变量进入模型，如此循环
+                if intercept:  # 是否有截距
+                    formula = "{} ~ {} + 1".format(target, ' + '.join(selected - set(elimination)))
+                else:
+                    formula = "{} ~ {} - 1".format(target, ' + '.join(selected - set(elimination)))
+
+                result = smf.ols(formula, df).fit()  # 最小二乘法回归模型拟合
+                fvalue = result.fvalue
+                f_pvalue = result.f_pvalue
+                score = eval('result.' + criterion)
+                scores_with_eliminations.append((score, elimination, fvalue, f_pvalue))  # 记录此次循环的变量、评分列表
+
+            if criterion == 'ssr':  # 这几个指标取最小值进行优化
+                scores_with_eliminations.sort(reverse=False)  # 对评分列表进行降序排序
+                worst_new_score, worst_elimination, worst_new_fvalue, worst_new_f_pvalue = scores_with_eliminations.pop()  # 提取最小分数及其对应变量
+                if ((worst_new_score - current_score) < p_remove[criterion]) and (
+                        worst_new_f_pvalue < f_pvalue_enter):  # 如果当前评分大于最新评分
+                    remaining.remove(worst_elimination)  # 从剩余未评分变量中剔除最新最优分对应的变量
+                    selected.remove(worst_elimination)  # 从已选变量列表中剔除最新最优分对应的变量
+                    current_score = worst_new_score  # 更新当前评分
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Removing %s, SSR = %.3f, Fstat = %.3f, FpValue = %.3e' %
+                              (worst_elimination, worst_new_score, worst_new_fvalue, worst_new_f_pvalue))
+            elif criterion in ['bic', 'aic']:  # 这几个指标取最小值进行优化
+                scores_with_eliminations.sort(reverse=False)  # 对评分列表进行降序排序
+                worst_new_score, worst_elimination, worst_new_fvalue, worst_new_f_pvalue = scores_with_eliminations.pop()  # 提取最小分数及其对应变量
+                if (worst_new_score - current_score) < p_remove[criterion]:  # 如果评分变动不显著
+                    remaining.remove(worst_elimination)  # 从剩余未评分变量中剔除最新最优分对应的变量
+                    selected.remove(worst_elimination)  # 从已选变量列表中剔除最新最优分对应的变量
+                    current_score = worst_new_score  # 更新当前评分
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Removing %s, %s = %.3f' % (worst_elimination, criterion, worst_new_score))
+            else:
+                scores_with_eliminations.sort(reverse=True)
+                worst_new_score, worst_elimination, worst_new_fvalue, worst_new_f_pvalue = scores_with_eliminations.pop()
+                if (current_score - worst_new_score) < p_remove[criterion]:
+                    remaining.remove(worst_elimination)
+                    selected.remove(worst_elimination)
+                    current_score = worst_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Removing %s, %s = %.3f' % (worst_elimination, criterion, worst_new_score))
+            iter_times += 1
+
+        if intercept:  # 是否有截距
+            formula = "{} ~ {} + 1".format(target, ' + '.join(selected))
+        else:
+            formula = "{} ~ {} - 1".format(target, ' + '.join(selected))
+
+        self.stepwise_model = smf.ols(formula, df).fit()  # 最优模型拟合
+
+        if show_step:  # 是否显示逐步回归过程
+            print('\nLinear regression model:', '\n  ',stepwise_model.model.formula)
+            print('\n',stepwise_model.summary())
+
+    ''' both '''
+    if direction == 'both':
+        remaining = list(df.columns)  # 自变量集合
+        remaining.remove(target)
+        selected = []  # 初始化选入模型的变量列表
+        # 初始化当前评分,最优新评分
+        if intercept:  # 是否有截距
+            formula = "{} ~ {} + 1".format(target, remaining[0])
+        else:
+            formula = "{} ~ {} - 1".format(target, remaining[0])
+
+        result = smf.ols(formula, df).fit()  # 最小二乘法回归模型拟合
+        current_score = eval('result.' + criterion)
+        best_new_score = eval('result.' + criterion)
+
+        if show_step:
+            print('\nstepwise starting:\n')
+        # 当变量未剔除完，并且当前评分更新时进行循环
+        iter_times = 0
+        while remaining and (current_score == best_new_score) and (iter_times < max_iter):
+            scores_with_candidates = []  # 初始化变量以及其评分列表
+            for candidate in remaining:  # 在未剔除的变量中每次选择一个变量进入模型，如此循环
+                if intercept:  # 是否有截距
+                    formula = "{} ~ {} + 1".format(target, ' + '.join(selected + [candidate]))
+                else:
+                    formula = "{} ~ {} - 1".format(target, ' + '.join(selected + [candidate]))
+
+                result = smf.ols(formula, df).fit()  # 最小二乘法回归模型拟合
+                fvalue = result.fvalue
+                f_pvalue = result.f_pvalue
+                score = eval('result.' + criterion)
+                scores_with_candidates.append((score, candidate, fvalue, f_pvalue))  # 记录此次循环的变量、评分列表
+
+            if criterion == 'ssr':  # 这几个指标取最小值进行优化
+                scores_with_candidates.sort(reverse=True)  # 对评分列表进行降序排序
+                best_new_score, best_candidate, best_new_fvalue, best_new_f_pvalue = scores_with_candidates.pop()  # 提取最小分数及其对应变量
+                if ((current_score - best_new_score) > p_enter[criterion]) and (
+                        best_new_f_pvalue < f_pvalue_enter):  # 如果当前评分大于最新评分
+                    remaining.remove(best_candidate)  # 从剩余未评分变量中剔除最新最优分对应的变量
+                    selected.append(best_candidate)  # 将最新最优分对应的变量放入已选变量列表
+                    current_score = best_new_score  # 更新当前评分
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, SSR = %.3f, Fstat = %.3f, FpValue = %.3e' %
+                              (best_candidate, best_new_score, best_new_fvalue, best_new_f_pvalue))
+                elif (current_score - best_new_score) >= 0 and (
+                        best_new_f_pvalue < f_pvalue_enter) and iter_times == 0:  # 当评分差大于等于0，且为第一次迭代
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif (best_new_f_pvalue < f_pvalue_enter) and iter_times == 0:  # 当评分差小于p_enter，且为第一次迭代
+                    selected.append(remaining[0])
+                    remaining.remove(remaining[0])
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (remaining[0], criterion, best_new_score))
+            elif criterion in ['bic', 'aic']:  # 这几个指标取最小值进行优化
+                scores_with_candidates.sort(reverse=True)  # 对评分列表进行降序排序
+                best_new_score, best_candidate, best_new_fvalue, best_new_f_pvalue = scores_with_candidates.pop()  # 提取最小分数及其对应变量
+                if (current_score - best_new_score) > p_enter[criterion]:  # 如果当前评分大于最新评分
+                    remaining.remove(best_candidate)  # 从剩余未评分变量中剔除最新最优分对应的变量
+                    selected.append(best_candidate)  # 将最新最优分对应的变量放入已选变量列表
+                    current_score = best_new_score  # 更新当前评分
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif (current_score - best_new_score) >= 0 and iter_times == 0:  # 当评分差大于等于0，且为第一次迭代
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif iter_times == 0:  # 当评分差小于p_enter，且为第一次迭代
+                    selected.append(remaining[0])
+                    remaining.remove(remaining[0])
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (remaining[0], criterion, best_new_score))
+            else:
+                scores_with_candidates.sort()
+                best_new_score, best_candidate, best_new_fvalue, best_new_f_pvalue = scores_with_candidates.pop()
+                if (best_new_score - current_score) > p_enter[criterion]:  # 当评分差大于p_enter
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif (best_new_score - current_score) >= 0 and iter_times == 0:  # 当评分差大于等于0，且为第一次迭代
+                    remaining.remove(best_candidate)
+                    selected.append(best_candidate)
+                    current_score = best_new_score
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (best_candidate, criterion, best_new_score))
+                elif iter_times == 0:  # 当评分差小于p_enter，且为第一次迭代
+                    selected.append(remaining[0])
+                    remaining.remove(remaining[0])
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Adding %s, %s = %.3f' % (remaining[0], criterion, best_new_score))
+
+            if intercept:  # 是否有截距
+                formula = "{} ~ {} + 1".format(target, ' + '.join(selected))
+            else:
+                formula = "{} ~ {} - 1".format(target, ' + '.join(selected))
+
+            result = smf.ols(formula, df).fit()  # 最优模型拟合
+            if iter_times >= 1:  # 当第二次循环时判断变量的pvalue是否达标
+                if result.pvalues.max() > p_value_enter:
+                    var_removed = result.pvalues[result.pvalues == result.pvalues.max()].index[0]
+                    p_value_removed = result.pvalues[result.pvalues == result.pvalues.max()].values[0]
+                    selected.remove(result.pvalues[result.pvalues == result.pvalues.max()].index[0])
+                    if show_step:  # 是否显示逐步回归过程
+                        print('Removing %s, Pvalue = %.3f' % (var_removed, p_value_removed))
+            iter_times += 1
+
+        if intercept:  # 是否有截距
+            formula = "{} ~ {} + 1".format(target, ' + '.join(selected))
+        else:
+            formula = "{} ~ {} - 1".format(target, ' + '.join(selected))
+
+        self.stepwise_model = smf.ols(formula, df).fit()  # 最优模型拟合
+        if show_step:  # 是否显示逐步回归过程
+            print('\nLinear regression model:', '\n  ', stepwise_model.model.formula)
+            print('\n', stepwise_model.summary())
+            # 最终模型选择的变量
+    if intercept:
+        stepwise_feat_selected_ = list(stepwise_model.params.index[1:])
+    else:
+        stepwise_feat_selected_ = list(stepwise_model.params.index)
+    return stepwise_feat_selected_
+
+
+
+
+            
+            
+        
+        
+        
+    
+        
+        
+    
+    
+    
+        
+        
+# def pick_variables(x,y,descover=True,method="rlr",threshold=0.25,sls=0.05):#默认阈值0.25
+# #向后淘汰
+#     if method =="bs"  and x.shape[1] > 1:
+#         #提取X，y变量名
+#         data = pd.concat([x, y], axis=1)#合并数据
+#
+#         var_list = x.columns
+#         response = y.name
+#         #首先对所有变量进行模型拟合
+#         while True:
+#             formula = "{} ~ {} + 1".format(response, ' + '.join(var_list))
+#             mod = smf.logit(formula, data).fit()
+#             print(mod.summary2())
+#             p_list = mod.pvalues.sort_values()
+#             if p_list[-1] > sls:
+#                 #提取p_list中最后一个index
+#                 var = p_list.index[-1]
+#                 #var_list中删除
+#                 var_list = var_list.drop(var)
+#             else:
+#                 break
+#         x=x[var_list]
+# #向前选择
+#     if method =="fs":
+#
+#         data = pd.concat([x, y], axis=1)
+#         response=y.name
+#         remaining = set(x.columns)
+#         selected = []
+#         current_score, best_new_score = 0.0, 0.0
+#         while remaining and current_score == best_new_score:
+#             scores_with_candidates = []
+#             for candidate in remaining:
+#                 formula = "{} ~ {} + 1".format(response, ' + '.join(selected + [candidate]))
+#                 mod = smf.logit(formula, data).fit()
+#                 score = mod.prsquared
+#                 scores_with_candidates.append((score, candidate))
+#             scores_with_candidates.sort(reverse=False)
+#             best_new_score, best_candidate = scores_with_candidates.pop()
+#             if current_score < best_new_score:
+#                 remaining.remove(best_candidate)
+#                 selected.append(best_candidate)
+#                 current_score = best_new_score
+#
+#         print(len(selected))
+#         x=x[selected]
+#
+# #rsquared_adj prsquared
+#
+#
+#     if method =="fs_bs":
+#         data = pd.concat([x, y], axis=1)
+#         response=y.name
+#
+#         remaining = set(x.columns)
+#         selected = []
+#         current_score, best_new_score = 0.0, 0.0
+#         while remaining and current_score == best_new_score:
+#             scores_with_candidates = []
+#             for candidate in remaining:
+#                 formula = "{} ~ {} + 1".format(response, ' + '.join(selected + [candidate]))
+#                 mod = smf.logit(formula, data).fit()
+#                 score = mod.prsquared
+#                 scores_with_candidates.append((score, candidate))
+#             scores_with_candidates.sort(reverse=False)
+#             best_new_score, best_candidate = scores_with_candidates.pop()
+#             if current_score < best_new_score:
+#                 print("===========================")
+#                 remaining.remove(best_candidate)
+#                 selected.append(best_candidate)
+#                 current_score = best_new_score
+#
+#             formula2= "{} ~ {} + 1".format(response, ' + '.join(selected))
+#             mod2 = smf.logit(formula2,data).fit()
+#             p_list = mod2.pvalues.sort_values()
+#             if p_list[-1] > sls:
+#                 #提取p_list中最后一个index
+#                 var = p_list.index[-1]
+#                 #var_list中删除
+#                 selected.remove(var)
+#                 print(p_list[-1])
+#                 formula3= "{} ~ {} + 1".format(response, ' + '.join(selected))
+#
+#                 mod3 = smf.logit(formula3, data).fit()
+#                 best_new_score = mod3.prsquared
+#                 current_score = best_new_score
+#
+#
+#         print(len(selected))
+#         x=x[selected]
+#     '''
+#     注意这里调用的是statsmodels.api里的逻辑回归。这个回归模型可以获取每个变量的显著性p值，p值越大越不显著，当我们发现多于一个变量不显著时，不能一次性剔除所有的不显著变量，因为里面可能存在我们还未发现的多变量的多重共线性，我们需要迭代的每次剔除最不显著的那个变量。
+#     上面迭代的终止条件：
+#     ①剔除了所有的不显著变量
+#     ②剔除了某一个或某几个变量后，剩余的不显著变量变得显著了。（说明之前存在多重共线性）
+#     '''
+#     if method =="rfc":
+#         RFC = RandomForestClassifier(n_estimators=200,max_depth=5,class_weight="balanced")
+#         RFC_Model = RFC.fit(x,y)
+#         features_rfc = x.columns
+#         featureImportance = {features_rfc[i]:RFC_Model.feature_importances_[i] for i in range(len(features_rfc))}
+#         featureImportanceSorted = sorted(featureImportance.items(),key=lambda x: x[1], reverse=True)
+#         # we selecte the top 10 features
+#         features_selection = [k[0] for k in featureImportanceSorted[:15]]
+#
+#         x = x[features_selection]
+#         x['intercept'] = [1]*x.shape[0]
+#
+#         LR = sm.Logit(y, x).fit()
+#         summary = LR.summary()
+#         print(summary)
+#         x=x.drop("intercept",axis=1)
+#
+#     return x

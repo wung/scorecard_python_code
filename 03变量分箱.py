@@ -50,9 +50,13 @@ def binning_cate(df,col_list,target):
         d2['woe'] = np.log(d2['badattr']/d2['goodattr'])
         d2['bin_iv'] = (d2['badattr']-d2['goodattr'])*d2['woe']
         d2['IV'] = d2['bin_iv'].sum()
+        df2["badcumsum"] = df2['bad'].cumsum()
+        df2['goodcumsum'] = df2['good'].cumsum()
+        df2['ks'] = max(df2['badcumsum']/sum(df2['badcumsum']) - df2['goodcumsum']/sum(df2['goodcumsum']))
         iv = d2['bin_iv'].sum().round(3)
         print('变量名:{}'.format(col))
         print('IV:{}'.format(iv))
+        print("KS:{}".format(df2['ks'].values.unique))
         print('\t')
         bin_df.append(d2)
         iv_value.append(iv)
@@ -425,7 +429,7 @@ def woe_monoton(bin_df):
             col_list.append(col_name)
             woe_judge.append('True')
         else:
-            woe_not_monoton = [(woe_list[i]<woe_list[i+1] and woe_list[i]<woe_list[i-1])  or (woe_list[i]>woe_list[i+1] and woe_list[i]>woe_list[i-1])                                for i in range(1,len(woe_list)-1,1)]
+            woe_not_monoton = [(woe_list[i]<woe_list[i+1] and woe_list[i]<woe_list[i-1])  or (woe_list[i]>woe_list[i+1] and woe_list[i]>woe_list[i-1]) for i in range(1,len(woe_list)-1,1)]
             if True in woe_not_monoton:
                 #print('{}是否单调: False'.format(col_name))
                 woe_notmonoton_col.append(col_name)

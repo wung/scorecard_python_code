@@ -691,3 +691,157 @@ def SelectData_stepwise(df,target,intercept=True,normalize=False,criterion='bic'
 #         x=x.drop("intercept",axis=1)
 #
 #     return x
+
+
+
+
+
+def binCreate(df,bins):
+    colList = df.columns
+    resDf = pd.DataFrame(columns=colList)
+    m,n = df.shape
+    referSer = pd.Series(range(m))
+    referSer.name = 'rank'
+    lableSer = pd.qcut(referSer, bins, labels=range(bins))
+    lableSer.name = 'bin'
+    lableDF = pd.concat([referSer,lableSer], axis=1)  #顺序与箱号合并
+    for col in colList:
+        rankSer = df[col].rank(method='min')
+        rankSer.name = 'rank'
+        rankDF = pd.concat([df[col],rankSer], axis=1)
+        binsDF = pd.merge(rankDF, lableDF, on='rank', how='left')
+        resDf[col] = binsDF['bin']
+    return resDf
+
+# 定义区间(类别)分布统计函数
+def binDistStatistic(df,tag):
+    colList = list(df.columns)  #转成列表
+    colList.remove(tag)         #删除目标变量
+    resDf = pd.DataFrame(columns=['colName','bin','binAllCnt','binPosCnt','binNegCnt','binPosRto','binNegRto'])
+    for col in colList:
+        allSer = df.groupby(col)[tag].count()         #计算样本数
+        allSer = allSer[allSer>0]                     #剔除无效区间
+        allSer.name = 'binAllCnt'                     #定义列名
+        posSer = df.groupby(col)[tag].sum()           #计算正样本数
+        posSer = posSer[allSer.index]                 #剔除无效区间
+        posSer.name = 'binPosCnt'                     #定义列名
+        tmpDf = pd.concat([allSer,posSer], axis=1)    #合并统计结果
+        tmpDf = tmpDf.reset_index()                   #行索引转为一列
+        tmpDf = tmpDf.rename(columns={col:'bin'})    #修改区间列列名
+        tmpDf['colName'] = col                        #增加字段名称列
+        tmpDf['binNegCnt'] = tmpDf['binAllCnt'] - tmpDf['binPosCnt']             #计算负样本数
+        tmpDf['binPosRto'] = tmpDf['binPosCnt'] * 1.0000 / tmpDf['binAllCnt']    #计算正样本比例
+        tmpDf['binNegRto'] = tmpDf['binNegCnt'] * 1.0000 / tmpDf['binAllCnt']    #计算负样本比例
+        tmpDf = tmpDf.reindex(columns=['colName','bin','binAllCnt','binPosCnt','binNegCnt','binPosRto','binNegRto'])  #索引重排
+        resDf = pd.concat([resDf,tmpDf])      #结果追加
+    rows, cols = df.shape
+    posCnt = df[tag].sum()
+    resDf['allCnt'] = rows                              #总体样本数
+    resDf['posCnt'] = posCnt                            #总体正样本数
+    resDf['negCnt'] = rows - posCnt                     #总体负样本数
+    resDf['posRto'] = posCnt * 1.0000 / rows            #总体正样本比例
+    resDf['negRto'] = (rows - posCnt) * 1.0000 / rows   #总体负样本比例
+    resDf['binPosCov'] = resDf['binPosCnt'] / resDf['posCnt']
+    resDf['binNegCov'] = resDf['binNegCnt'] / resDf['negCnt']
+    return resDf
+
+# 定义区间(类别)属性统计函数
+def binAttrStatistic(df,cont,disc,bins):
+    m,n = df.shape
+    referSer = pd.Series(range(m))
+    referSer.name = 'rank'
+    lableSer = pd.qcut(referSer, bins, labels=range(bins))
+    lableSer.name = 'bin'
+    lableDF = pd.concat([referSer,lableSer], axis=1)  #顺序与箱号合并
+    resDf = pd.DataFrame(columns=['colName','bin','minVal','maxVal','binInterval'])
+    for col in cont:
+        rankSer = df[col].rank(method='min')
+        rankSer.name = 'rank'
+        rankDF = pd.concat([df[col],rankSer], axis=1)
+        binsDF = pd.merge(rankDF, lableDF, on='rank', how='left')
+        minSer = binsDF.groupby('bin')[col].min()
+        minSer.name = 'minVal'
+        maxSer = binsDF.groupby('bin')[col].max()
+        maxSer.name = 'maxVal'
+        tmpDf = pd.concat([minSer,maxSer], axis=1)
+        tmpDf = tmpDf.reset_index()
+        tmpDf['colName'] = col
+        tmpDf['binInterval'] = tmpDf['minVal'].astype('str') + '-' + tmpDf['maxVal'].astype('str') 
+        tmpDf = tmpDf.reindex(columns=['colName','bin','minVal','maxVal','binInterval'])
+        tmpDf = tmpDf[tmpDf['binInterval']!='nan-nan']
+        resDf =  pd.concat([resDf,tmpDf])
+    for col in disc:
+        binSer = pd.Series(df[col].unique())
+        tmpDf = pd.concat([binSer,binSer], axis=1)
+        tmpDf['colName'] = col
+        tmpDf.rename(columns={0:'bin',1:'binInterval'}, inplace = True)
+        tmpDf = tmpDf.reindex(columns=['colName','bin','minVal','maxVal','binInterval'])
+        resDf = pd.concat([resDf,tmpDf])
+    return resDf
+
+# 定义结果合并函数
+def binStatistic(df,cont,disc,tag,bins):
+    binResDf = binCreate(df[cont], bins)  # 连续变量分箱
+    binData = pd.concat([binResDf,df[disc],df[tag]], axis=1)  #合并离散变量与目标变量
+    binDistStatResDf = binDistStatistic(binData,tag)  #对分箱后数据集进行分布统计
+    binAttrStatResDf = binAttrStatistic(df,cont,disc,bins)  #区间(类别)大小统计
+    binStatResDf = pd.merge(binDistStatResDf, binAttrStatResDf, left_on=['colName','bin'], right_on=['colName','bin'], how='left')
+    resDf = binStatResDf.reindex(columns=['colName','bin','binInterval','minVal','maxVal','binAllCnt','binPosCnt','binNegCnt','binPosRto','binNegRto','allCnt','posCnt','negCnt','posRto','negRto','binPosCov','binNegCov'])
+    return resDf
+
+# 信息增益
+import math
+def entropyVal(prob):
+    if (prob == 0 or prob == 1):
+        entropy = 0
+    else:
+        entropy = -(prob * math.log(prob,2) + (1-prob) * math.log((1-prob),2))
+    return entropy
+
+def gain(df,cont,disc,tag,bins):
+    binDf = binStatistic(df,cont,disc,tag,bins)
+    binDf['binAllRto'] = binDf['binAllCnt'] / binDf['allCnt']   #计算各区间样本占比
+    binDf['binEnty'] = binDf['binAllRto'] * binDf['binPosRto'].apply(entropyVal)    #计算各区间信息熵
+    binDf['allEnty'] = binDf['posRto'].apply(entropyVal)        #计算总体信息熵
+    tmpSer = binDf['allEnty'].groupby(binDf['colName']).mean() - binDf['binEnty'].groupby(binDf['colName']).sum()   #计算信息增益=总体信息熵-各区间信息熵加权和
+    tmpSer.name = 'gain'
+    resSer = tmpSer.sort_values(ascending=False)                #按信息增益大小降序重排
+    return resSer
+
+# 基于基尼系数
+
+def giniVal(prob):
+    gini = 1 - pow(prob,2) - pow(1-prob,2)
+    return gini
+    
+def gini(df,cont,disc,tag,bins):
+    binDf = binStatistic(df,cont,disc,tag,bins)
+    binDf['binAllRto'] = binDf['binAllCnt'] / binDf['allCnt']   #计算各区间样本占比
+    binDf['binGini'] = binDf['binAllRto'] * binDf['binPosRto'].apply(giniVal)    #计算各区间信息熵
+    binDf['allGini'] = binDf['posRto'].apply(giniVal)        #计算总体信息熵
+    tmpSer = binDf['allGini'].groupby(binDf['colName']).mean() - binDf['binGini'].groupby(binDf['colName']).sum()   #计算信息增益=总体信息熵-各区间信息熵加权和
+    tmpSer.name = 'gini'
+    resSer = tmpSer.sort_values(ascending=False)                #按信息增益大小降序重排
+    return resSer
+
+##区分度计算
+def lift(df,cont,disc,tag,bins):
+    binDf = binStatistic(df,cont,disc,tag,bins)
+    binDf['binLift'] = binDf['binPosRto'] / binDf['posRto']             #区间提升度=区间正样本比例/总体正样本比例
+    tmpSer = binDf['binLift'].groupby(binDf['colName']).max()           #变量区分度=max(区间提升度)
+    tmpSer.name = 'lift'
+    resSer = tmpSer.sort_values(ascending=False)        #按区分度大小降序重排
+    return resSer
+
+
+##信息值(IV)计算
+def iv(df,cont,disc,tag,bins):
+    binDf = binStatistic(df,cont,disc,tag,bins)
+    binDf['binPosCovAdj'] = (binDf['binPosCnt'].replace(0,1)) / binDf['posCnt']     #调整后区间正样本覆盖率(避免值为0无法取对数)
+    binDf['binNegCovAdj'] = (binDf['binNegCnt'].replace(0,1)) / binDf['negCnt']     #调整后区间负样本覆盖率(避免值为0无法取对数)
+    binDf['woe'] = binDf['binPosCovAdj'].apply(lambda x:math.log(x,math.e)) - binDf['binNegCovAdj'].apply(lambda x:math.log(x,math.e))
+    binDf['iv'] = binDf['woe'] * (binDf['binPosCovAdj'] - binDf['binNegCovAdj'])
+    tmpSer = binDf.groupby('colName')['iv'].sum()
+    tmpSer.name = 'iv'
+    resSer = tmpSer.sort_values(ascending=False)
+    return resSer
